@@ -1,17 +1,19 @@
 package com.java.multithreading.tasks;
 
 import java.util.ArrayList;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.Semaphore;
 
 public class LunchtimePhilosophers implements Task {
 
     @Override
     public void solve() {
-        Philosopher p1 = new Philosopher("Philosopher #1");
-        Philosopher p2 = new Philosopher("Philosopher #2");
-        Philosopher p3 = new Philosopher("Philosopher #3");
-        Philosopher p4 = new Philosopher("Philosopher #4");
-        Philosopher p5 = new Philosopher("Philosopher #5");
+        Semaphore semaphore = new Semaphore(2);
+
+        Philosopher p1 = new Philosopher("Philosopher #1", semaphore);
+        Philosopher p2 = new Philosopher("Philosopher #2", semaphore);
+        Philosopher p3 = new Philosopher("Philosopher #3", semaphore);
+        Philosopher p4 = new Philosopher("Philosopher #4", semaphore);
+        Philosopher p5 = new Philosopher("Philosopher #5", semaphore);
 
         DiningTable table = new DiningTable();
         table.putGuest(p1);
@@ -35,25 +37,26 @@ public class LunchtimePhilosophers implements Task {
 
         void requestFork(ForkRequest forkRequest);
 
-        void setLeftFork(Fork fork);
-
         Fork getLeftFork();
-
-        void setRightFork(Fork fork);
 
         Fork getRightFork();
 
         boolean isEating();
 
+        void ponder();
+
     }
 
     private interface ForkRequest {
-        void askPolitely(Guest guest, boolean leftForkRequired);
+        Fork getFork(Guest guest, boolean leftRequired) throws InterruptedException;
     }
 
     private static class DiningTable {
+        private final ArrayList<Guest> guests;
 
-        private final ArrayList<Guest> guests = new ArrayList<>();
+        public DiningTable() {
+            this.guests = new ArrayList<>();
+        }
 
         public void putGuest(Guest guest) {
             guest.setSetting(new TableSetting());
@@ -63,37 +66,31 @@ public class LunchtimePhilosophers implements Task {
         }
 
         private ForkRequest createForkRequest() {
-            return (guest, leftForkRequired) -> {
-                synchronized (guest) {
-                    int index = guests.indexOf(guest);
+            return (guest, leftRequired) -> {
+                int index = guests.indexOf(guest);
 
-                    if (leftForkRequired) {
-                        index = index == guests.size() - 1 ? 0 : index + 1;
-                    }
-                    else {
-                        index = index == 0 ? guests.size() - 1 : index - 1;
-                    }
-
-                    Guest tablemate = guests.get(index);
-
-                    while (tablemate.isEating()) {
-                        try {
-                            wait();
-                        }
-                        catch (InterruptedException e) {
-                            throw new RuntimeException(e);
-                        }
-                    }
-
-                    if (leftForkRequired) {
-                        System.out.printf("%s is sharing the left fork with %s%n", tablemate.getName(), guest.getName());
-                        guest.setRightFork(tablemate.getLeftFork());
-                    }
-                    else {
-                        System.out.printf("%s is sharing the right fork with %s%n", tablemate.getName(), guest.getName());
-                        guest.setLeftFork(tablemate.getRightFork());
-                    }
+                if (leftRequired) {
+                    index = index == 0 ? guests.size() - 1 : index - 1;
                 }
+                else {
+                    index = index == guests.size() - 1 ? 0 : index + 1;
+                }
+
+                Guest tablemate = guests.get(index);
+
+                while (tablemate.isEating()) {
+                    guest.ponder();
+                }
+
+                Fork fork = leftRequired ? tablemate.getRightFork() : tablemate.getLeftFork();
+                if (fork != null) {
+                    System.out.printf("%s is sharing the %s fork with %s%n",
+                        tablemate.getName(),
+                        leftRequired ? "right" : "left",
+                        guest.getName()
+                    );
+                }
+                return fork;
             };
         }
 
@@ -101,15 +98,17 @@ public class LunchtimePhilosophers implements Task {
 
     private static class Philosopher extends Thread implements Guest {
 
-        private final AtomicBoolean isEating;
+        private final Semaphore semaphore;
 
         private TableSetting setting;
 
         private ForkRequest forkRequest;
 
-        private Philosopher(String name) {
+        private boolean isEating;
+
+        private Philosopher(String name, Semaphore semaphore) {
             setName(name);
-            this.isEating = new AtomicBoolean(false);
+            this.semaphore = semaphore;
         }
 
         @Override
@@ -123,65 +122,75 @@ public class LunchtimePhilosophers implements Task {
         }
 
         @Override
-        public synchronized void setLeftFork(Fork fork) {
-            setting.setLeftFork(fork);
-        }
-
-        @Override
-        public synchronized Fork getLeftFork() {
+        public Fork getLeftFork() {
             Fork fork = setting.getLeftFork();
             setting.setLeftFork(null);
             return fork;
         }
 
         @Override
-        public void setRightFork(Fork fork) {
-            setting.setRightFork(fork);
-        }
-
-        @Override
-        public synchronized Fork getRightFork() {
+        public Fork getRightFork() {
             Fork fork = setting.getRightFork();
             setting.setRightFork(null);
             return fork;
         }
 
         @Override
-        public void run() {
-            eat();
+        public boolean isEating() {
+            return isEating;
         }
 
-        public void eat() {
-            System.out.printf("%s is asking for the right fork%n", getName());
-            forkRequest.askPolitely(this, true);
-//            while (!setting.isReady()) {
-//                if (setting.getLeftFork() == null) {
-//                    System.out.printf("%s is asking for the left fork%n", getName());
-//                    forkRequest.askPolitely(this, true);
-//                }
-//
-//                if (setting.getRightFork() == null) {
-//                    System.out.printf("%s is asking for the right fork%n", getName());
-//                    forkRequest.askPolitely(this, true);
-//                }
-//            }
+        @Override
+        public void ponder() {
+            try {
+                System.out.printf("%s is pondering...%n", getName());
+                sleep(1000);
+            }
+            catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
 
-            isEating.set(true);
-            System.out.printf(String.format("%s started eating\n", getName()));
+        @Override
+        public void run() {
+            try {
+                eat();
+            }
+            catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        public void eat() throws InterruptedException {
+            semaphore.acquire();
+
+            while (!setting.isReady()) {
+                if (setting.getLeftFork() == null) {
+                    System.out.printf("%s is asking for the left fork%n", getName());
+                    setting.setLeftFork(forkRequest.getFork(this, true));
+                }
+
+                if (setting.getRightFork() == null) {
+                    System.out.printf("%s is asking for the right fork%n", getName());
+                    setting.setRightFork(forkRequest.getFork(this, false));
+                }
+            }
+            System.out.printf("%s has had the setting set: %s%n", getName(), setting.isReady());
+
+            isEating = true;
 
             Plate plate = setting.getPlate();
+
+            System.out.printf("%s started eating%n", getName());
             while (!plate.isEmpty()) {
                 plate.decreaseFoodPercentage();
             }
+            System.out.printf("%s finished eating%n", getName());
 
-            isEating.set(false);
-            System.out.printf(String.format("%s finished eating\n", getName()));
-            notify();
+            isEating = false;
+            semaphore.release();
         }
 
-        public boolean isEating() {
-            return isEating.get();
-        }
     }
 
     private static class TableSetting {
@@ -243,3 +252,4 @@ public class LunchtimePhilosophers implements Task {
     }
 
 }
+
